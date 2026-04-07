@@ -1,0 +1,24 @@
+# dependencies
+node_modules/
+
+# env & secret
+.env
+
+# session & akun
+sessions/
+accounts/
+
+# archive
+*.tar
+*.tar.gz
+*.zip
+
+# logs
+*.log
+logs/
+
+# pm2
+.pm2/
+
+# vscode
+.vscode/

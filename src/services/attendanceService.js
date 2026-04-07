@@ -2,7 +2,7 @@ const axios = require("axios");
 const cheerio = require("cheerio");
 const { loadCookies, buildCookieHeader } = require("./sessionService");
 const { ensureLogin } = require("./authService");
-const { getJakartaTime, calculateWorkHours } = require("../utils/time");
+const { getJakartaTime, calculateWorkHours, calculateWorkDurationWithBreak, predictGoHomeTime } = require("../utils/time");
 const { attendanceReminderState } = require("../state/memoryState");
 
 async function checkTodayAttendance(chatId) {
@@ -47,7 +47,6 @@ async function checkTodayAttendance(chatId) {
     }
 
     const $ = cheerio.load(response.data);
-
     const row = $(`tr.tanggal-${today}`);
 
     if (!row.length) return;
@@ -55,6 +54,7 @@ async function checkTodayAttendance(chatId) {
     const waktuText = row.find("td").eq(2).text().trim();
     const state = attendanceReminderState[chatId];
 
+    // 🔔 Belum absen masuk
     if ((!waktuText || waktuText.includes("Tidak Ada")) && (hour > 7 || (hour === 7 && minute >= 45))) {
       if (!state.masuk) {
         await bot.sendMessage(chatId, "🔔 Sudah lewat 07:45 dan Anda belum absen masuk.");
@@ -65,19 +65,23 @@ async function checkTodayAttendance(chatId) {
 
     const times = waktuText.split(",").map((t) => t.trim());
 
-    if (times.length === 1 && (hour > 16 || (hour === 16 && minute >= 30))) {
-      if (!state.pulang) {
-        await bot.sendMessage(chatId, `🔔 Sudah lewat 16:30 dan Anda belum absen pulang.\nMasuk: ${times[0]}`);
+    // 🔔 Belum absen pulang
+    if (times.length === 1) {
+      const prediksi = predictGoHomeTime(times);
+
+      if ((hour > 16 || (hour === 16 && minute >= 30)) && !state.pulang) {
+        await bot.sendMessage(chatId, `🔔 Anda belum absen pulang.\nMasuk: ${times[0]}\nEstimasi cukup jam: ${prediksi}`);
         state.pulang = true;
       }
       return;
     }
 
-    if (times.length === 2) {
-      const diff = calculateWorkHours(times[0], times[1]);
+    // ⚠️ Cek jam kerja kurang
+    if (times.length >= 2) {
+      const durasi = calculateWorkDurationWithBreak(times);
 
-      if (diff < 7.5 && !state.kurangJam) {
-        await bot.sendMessage(chatId, `⚠️ Jam kerja kurang dari 7,5 jam!\n` + `Masuk: ${times[0]}\n` + `Pulang: ${times[1]}\n` + `Total: ${diff.toFixed(2)} jam`);
+      if (durasi < 7.5 && !state.kurangJam) {
+        await bot.sendMessage(chatId, `⚠️ Jam kerja kurang dari 7,5 jam!\n` + `Total: ${durasi.toFixed(2)} jam`);
         state.kurangJam = true;
       }
     }
@@ -89,6 +93,7 @@ async function checkTodayAttendance(chatId) {
 async function getAttendanceReport(chatId, bulan = null) {
   const bot = require("../bot/telegramBot");
   const cookies = loadCookies(chatId);
+
   if (!cookies) {
     return bot.sendMessage(chatId, "⚠️ Session tidak ditemukan. Silakan login.");
   }
@@ -136,8 +141,26 @@ async function getAttendanceReport(chatId, bulan = null) {
         return;
       }
 
-      rincian += `📅 *${tanggal}* (${hari})\n`;
+      const times = waktu.split(",").map((t) => t.trim());
+
+      let durasi = 0;
+      if (times.length >= 2) {
+        durasi = calculateWorkDurationWithBreak(times);
+      }
+
+      const durasiText = durasi ? ` - (${durasi.toFixed(2).replace(".", ",")} jam)` : "";
+
+      rincian += `📅 *${tanggal}* (${hari})${durasiText}\n`;
       rincian += `⏰ ${waktu}\n`;
+
+      // 🔥 Prediksi pulang jika belum absen
+      if (times.length === 1) {
+        const prediksi = predictGoHomeTime(times);
+
+        if (prediksi) {
+          rincian += `🏁 Estimasi Pulang : ${prediksi} (7,5 jam)\n`;
+        }
+      }
 
       if (potongan) {
         rincian += `💸 Potongan : ${potongan}\n`;
@@ -159,14 +182,15 @@ async function getAttendanceReport(chatId, bulan = null) {
       `📋 *RINCIAN KEHADIRAN*\n\n` +
       rincian.substring(0, 3500);
 
-    await bot.sendMessage(chatId, message, { parse_mode: "Markdown" });
+    await bot.sendMessage(chatId, message, {
+      parse_mode: "Markdown",
+    });
   } catch (err) {
     console.log("REKAP ERROR:", err.message);
     await bot.sendMessage(chatId, "❌ Gagal mengambil rekap kehadiran");
   }
 }
 
-// Ekspor langsung sebagai object
 module.exports = {
   checkTodayAttendance,
   getAttendanceReport,

@@ -20,25 +20,68 @@ function getTanggalHariIni() {
 }
 
 function isHariIni(tanggalString) {
-  if (!tanggalString || typeof tanggalString !== "string") return false;
-  const cleanTanggal = tanggalString.replace("🆕", "").trim();
-  return cleanTanggal === getTanggalHariIni();
+  if (!tanggalString) return false;
+  return tanggalString.replace("🆕", "").trim() === getTanggalHariIni();
 }
 
 // ==========================
-// AUTO FILL KINERJA TAMBAHAN
+// GET REPORT (UNTUK /kinerja)
+// ==========================
+async function getDailyPerformanceReport(chatId) {
+  const bot = require("../bot/telegramBot");
+
+  try {
+    const isValid = await ensureLogin(chatId);
+    if (!isValid) {
+      return bot.sendMessage(chatId, "⚠️ Silakan login dengan /login");
+    }
+
+    const cookieHeader = buildCookieHeader(loadCookies(chatId));
+
+    const url = "https://e-kinerja.babelprov.go.id/v1/index.php?r=kinerja%2Fkegiatan-harian%2Findex-v4";
+
+    const res = await axios.get(url, {
+      headers: { Cookie: cookieHeader },
+    });
+
+    if (res.data.includes("site/login")) {
+      return bot.sendMessage(chatId, "⚠️ Session expired");
+    }
+
+    const $ = cheerio.load(res.data);
+
+    let hasToday = false;
+    let total = 0;
+
+    $("table.table-bordered tr").each((i, row) => {
+      const cols = $(row).find("td");
+      if (cols.length >= 8) {
+        total++;
+        const tanggal = $(cols[2]).text().trim();
+        if (isHariIni(tanggal)) hasToday = true;
+      }
+    });
+
+    let msg = `📊 *STATUS KINERJA*\n\n`;
+    msg += `Total entri: ${total}\n`;
+    msg += `Hari ini: ${hasToday ? "✅ Sudah isi" : "❌ Belum isi"}\n`;
+
+    await bot.sendMessage(chatId, msg, { parse_mode: "Markdown" });
+  } catch (err) {
+    console.log("REPORT ERROR:", err.message);
+  }
+}
+
+// ==========================
+// AUTO FILL
 // ==========================
 async function autoFillKinerjaTambahan(chatId) {
   const bot = require("../bot/telegramBot");
 
   try {
-    console.log(`🤖 Auto fill kinerja tambahan: ${chatId}`);
-
     await ensureLogin(chatId);
-    const cookies = loadCookies(chatId);
-    const cookieHeader = buildCookieHeader(cookies);
+    const cookieHeader = buildCookieHeader(loadCookies(chatId));
 
-    // 1. GET halaman create (ambil CSRF)
     const createUrl = "https://e-kinerja.babelprov.go.id/v1/index.php?r=kinerja%2Fkegiatan-harian%2Fcreate-v4&id_kegiatan_harian_jenis=2";
 
     const page = await axios.get(createUrl, {
@@ -47,39 +90,30 @@ async function autoFillKinerjaTambahan(chatId) {
 
     const $ = cheerio.load(page.data);
 
-    let csrfToken = $('input[name="_csrf"]').val() || $('meta[name="csrf-token"]').attr("content");
+    const csrf = $('input[name="_csrf"]').val() || $('meta[name="csrf-token"]').attr("content");
 
-    if (!csrfToken) {
-      console.log("❌ CSRF tidak ditemukan");
-      return;
-    }
+    if (!csrf) return;
 
-    // 2. POST data
     const form = new URLSearchParams();
-
-    form.append("_csrf", csrfToken);
+    form.append("_csrf", csrf);
     form.append("KegiatanHarian[uraian]", "Melaksanakan tugas tambahan kedinasan lainnya");
     form.append("KegiatanHarian[realisasi]", "1");
 
-    const postUrl = "https://e-kinerja.babelprov.go.id/v1/index.php?r=kinerja%2Fkegiatan-harian%2Fcreate-v4&id_kegiatan_harian_jenis=2";
-
-    await axios.post(postUrl, form, {
+    await axios.post(createUrl, form, {
       headers: {
         Cookie: cookieHeader,
         "Content-Type": "application/x-www-form-urlencoded",
       },
     });
 
-    console.log(`✅ Auto kinerja tambahan berhasil: ${chatId}`);
-
-    await bot.sendMessage(chatId, "🤖 *AUTO KINERJA*\n\nSistem otomatis mengisi *kinerja tambahan* karena Anda belum mengisi hingga pukul 16:00.", { parse_mode: "Markdown" });
+    await bot.sendMessage(chatId, "🤖 Auto kinerja tambahan diisi");
   } catch (err) {
-    console.log("AUTO FILL ERROR:", err.message);
+    console.log("AUTO ERROR:", err.message);
   }
 }
 
 // ==========================
-// CHECK & REMINDER
+// CHECK + REMINDER
 // ==========================
 async function checkTodayPerformance(chatId) {
   const bot = require("../bot/telegramBot");
@@ -88,34 +122,26 @@ async function checkTodayPerformance(chatId) {
   if (!cookies) return;
 
   const now = getJakartaTime();
-  const today = now.toLocaleDateString("sv-SE");
   const hour = now.getHours();
-  const minute = now.getMinutes();
+  const today = now.toLocaleDateString("sv-SE");
 
-  // hanya jam kerja
   if (hour < 8 || hour >= 23) {
-    if (hour >= 23 && performanceReminderState[chatId]) {
-      delete performanceReminderState[chatId];
-    }
+    if (hour >= 23) delete performanceReminderState[chatId];
     return;
   }
 
-  // init state
   if (!performanceReminderState[chatId]) {
     performanceReminderState[chatId] = {
       tanggal: today,
-      telahDiingatkan: false,
       reminderCount: 0,
       lastReminderHour: null,
       sudahAutoIsi: false,
     };
   }
 
-  // reset harian
   if (performanceReminderState[chatId].tanggal !== today) {
     performanceReminderState[chatId] = {
       tanggal: today,
-      telahDiingatkan: false,
       reminderCount: 0,
       lastReminderHour: null,
       sudahAutoIsi: false,
@@ -127,69 +153,50 @@ async function checkTodayPerformance(chatId) {
 
     const cookieHeader = buildCookieHeader(loadCookies(chatId));
 
-    const url = "https://e-kinerja.babelprov.go.id/v1/index.php?r=kinerja%2Fkegiatan-harian%2Findex-v4";
+    const res = await axios.get("https://e-kinerja.babelprov.go.id/v1/index.php?r=kinerja%2Fkegiatan-harian%2Findex-v4", { headers: { Cookie: cookieHeader } });
 
-    const response = await axios.get(url, {
-      headers: { Cookie: cookieHeader },
-    });
+    const $ = cheerio.load(res.data);
 
-    if (response.data.includes("site/login")) return;
-
-    const $ = cheerio.load(response.data);
-
-    let hasPerformanceToday = false;
+    let hasToday = false;
 
     $("table.table-bordered tr").each((i, row) => {
       const cols = $(row).find("td");
       if (cols.length >= 8) {
         const tanggal = $(cols[2]).text().trim();
         if (isHariIni(tanggal)) {
-          hasPerformanceToday = true;
+          hasToday = true;
           return false;
         }
       }
     });
 
-    // ==========================
-    // AUTO FILL JAM 16
-    // ==========================
-    if (hour >= 16 && !hasPerformanceToday && !performanceReminderState[chatId].sudahAutoIsi) {
+    // AUTO FILL
+    if (hour >= 16 && !hasToday && !performanceReminderState[chatId].sudahAutoIsi) {
       await autoFillKinerjaTambahan(chatId);
       performanceReminderState[chatId].sudahAutoIsi = true;
     }
 
-    // ==========================
     // REMINDER
-    // ==========================
-    if (!hasPerformanceToday) {
+    if (!hasToday) {
       if (performanceReminderState[chatId].reminderCount >= 3) return;
 
-      if (performanceReminderState[chatId].lastReminderHour !== null && hour - performanceReminderState[chatId].lastReminderHour < 2) return;
+      if (performanceReminderState[chatId].lastReminderHour && hour - performanceReminderState[chatId].lastReminderHour < 2) return;
 
-      let msg = `📝 *REMINDER KINERJA*\n\n`;
-      msg += `Anda belum mengisi kinerja hari ini.\n\n`;
-
-      if (hour >= 21) msg += `⚠️ Hampir habis!\n`;
-      else if (hour >= 18) msg += `⏰ Waktu menipis\n`;
-
-      msg += `👉 [Isi Sekarang](https://e-kinerja.babelprov.go.id/v1/index.php?r=kinerja%2Fkegiatan-harian%2Fcreate-v4)\n`;
-
-      await bot.sendMessage(chatId, msg, {
-        parse_mode: "Markdown",
-        disable_web_page_preview: true,
-      });
+      await bot.sendMessage(chatId, "📝 Jangan lupa isi kinerja hari ini");
 
       performanceReminderState[chatId].reminderCount++;
       performanceReminderState[chatId].lastReminderHour = hour;
-    } else {
-      performanceReminderState[chatId].telahDiingatkan = true;
     }
   } catch (err) {
     console.log("CHECK ERROR:", err.message);
   }
 }
 
+// ==========================
+// EXPORT (FIX ERROR 🔥)
+// ==========================
 module.exports = {
+  getDailyPerformanceReport, // 🔥 ini yang bikin /kinerja hidup lagi
   checkTodayPerformance,
   getTanggalHariIni,
   isHariIni,

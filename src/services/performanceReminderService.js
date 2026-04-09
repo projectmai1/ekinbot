@@ -6,6 +6,8 @@ const { getJakartaTime } = require("../utils/time");
 const { performanceReminderState } = require("../state/memoryState");
 const { isHariIni, getTanggalHariIni } = require("./dailyPerformanceService");
 
+const TEST_MODE = process.env.TEST_AUTOFILL === "true";
+
 async function checkTodayPerformance(chatId) {
   const bot = require("../bot/telegramBot");
 
@@ -43,15 +45,9 @@ async function checkTodayPerformance(chatId) {
       telahDiingatkan: false,
       reminderCount: 0,
       lastReminderHour: null,
+      sudahAutoIsi: false,
     };
   }
-
-  // limit reminder
-  if (performanceReminderState[chatId].reminderCount >= 3) return;
-
-  // interval 2 jam
-  const last = performanceReminderState[chatId].lastReminderHour;
-  if (last !== null && hour - last < 2) return;
 
   try {
     await ensureLogin(chatId);
@@ -84,7 +80,7 @@ async function checkTodayPerformance(chatId) {
     // ==========================
     // AUTO FILL JAM 16
     // ==========================
-    if (hour >= 0 && !hasToday && !performanceReminderState[chatId].sudahAutoIsi) {
+    if ((TEST_MODE || hour >= 16) && !hasToday && !performanceReminderState[chatId].sudahAutoIsi) {
       console.log(`🤖 Trigger auto fill untuk ${chatId}`);
 
       await autoFillKinerjaTambahan(chatId);
@@ -96,7 +92,14 @@ async function checkTodayPerformance(chatId) {
     // REMINDER
     // ==========================
     if (!hasToday) {
-      let msg = `📝 *REMINDER KINERJA HARIAN* (${hour}:${minute})\n\n`;
+      // limit reminder
+      if (performanceReminderState[chatId].reminderCount >= 3) return;
+
+      // interval 2 jam
+      const last = performanceReminderState[chatId].lastReminderHour;
+      if (last !== null && hour - last < 2) return;
+      const timeStr = `${hour.toString().padStart(2, "0")}:${minute.toString().padStart(2, "0")}`;
+      let msg = `📝 *REMINDER KINERJA HARIAN* (${timeStr})\n\n`;
       msg += `Hari ini Anda belum mengisi kinerja.\n\n`;
 
       const hoursLeft = 23 - hour;

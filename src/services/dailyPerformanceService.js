@@ -5,479 +5,193 @@ const { ensureLogin } = require("./authService");
 const { getJakartaTime } = require("../utils/time");
 const { performanceReminderState } = require("../state/memoryState");
 
-// Fungsi untuk mendapatkan tanggal hari ini dalam format yang konsisten dengan e-kinerja
+// ==========================
+// UTIL TANGGAL
+// ==========================
 function getTanggalHariIni() {
   const now = getJakartaTime();
   const day = now.getDate();
   const month = now.getMonth() + 1;
   const year = now.getFullYear();
 
-  // Format: "6 Februari 2026" (sesuai dengan format e-kinerja)
   const monthNames = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
 
   return `${day} ${monthNames[month - 1]} ${year}`;
 }
 
-// Fungsi untuk mengecek apakah string tanggal adalah hari ini
 function isHariIni(tanggalString) {
   if (!tanggalString || typeof tanggalString !== "string") return false;
-
-  // Bersihkan string tanggal dari karakter tambahan
   const cleanTanggal = tanggalString.replace("🆕", "").trim();
-  const todayFormatted = getTanggalHariIni();
-
-  // Lakukan perbandingan eksak
-  return cleanTanggal === todayFormatted;
+  return cleanTanggal === getTanggalHariIni();
 }
 
-// Fungsi untuk parsing tanggal dari berbagai format
-function parseTanggal(tanggalStr) {
-  if (!tanggalStr) return null;
-
-  // Coba format: "6 Februari 2026"
-  const parts = tanggalStr.split(" ");
-  if (parts.length >= 3) {
-    const day = parseInt(parts[0]);
-    const monthStr = parts[1];
-    const year = parseInt(parts[2]);
-
-    const monthNames = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
-    const monthIndex = monthNames.indexOf(monthStr);
-
-    if (monthIndex !== -1 && !isNaN(day) && !isNaN(year)) {
-      return new Date(year, monthIndex, day);
-    }
-  }
-
-  // Coba format: "2026-02-06"
-  const isoMatch = tanggalStr.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
-  if (isoMatch) {
-    const year = parseInt(isoMatch[1]);
-    const month = parseInt(isoMatch[2]) - 1;
-    const day = parseInt(isoMatch[3]);
-    return new Date(year, month, day);
-  }
-
-  return null;
-}
-
-async function getDailyPerformanceReport(chatId) {
+// ==========================
+// AUTO FILL KINERJA TAMBAHAN
+// ==========================
+async function autoFillKinerjaTambahan(chatId) {
   const bot = require("../bot/telegramBot");
 
   try {
-    // Pastikan session valid
-    const isValid = await ensureLogin(chatId);
-    if (!isValid) {
-      return bot.sendMessage(chatId, "⚠️ Session tidak valid. Silakan login dengan /login");
-    }
+    console.log(`🤖 Auto fill kinerja tambahan: ${chatId}`);
 
-    // Ambil cookies
+    await ensureLogin(chatId);
     const cookies = loadCookies(chatId);
-    if (!cookies) {
-      return bot.sendMessage(chatId, "⚠️ Session tidak ditemukan. Silakan login.");
-    }
-
     const cookieHeader = buildCookieHeader(cookies);
 
-    // Ambil tanggal hari ini
-    const now = getJakartaTime();
-    const todayFormatted = getTanggalHariIni();
-    const formattedDate = now.toLocaleDateString("id-ID", {
-      weekday: "long",
-      year: "numeric",
-      month: "long",
-      day: "numeric",
+    // 1. GET halaman create (ambil CSRF)
+    const createUrl = "https://e-kinerja.babelprov.go.id/v1/index.php?r=kinerja%2Fkegiatan-harian%2Fcreate-v4&id_kegiatan_harian_jenis=2";
+
+    const page = await axios.get(createUrl, {
+      headers: { Cookie: cookieHeader },
     });
 
-    console.log(`📊 Fetching daily performance for ${chatId}`);
-    console.log(`📅 Today is: ${todayFormatted}`);
+    const $ = cheerio.load(page.data);
 
-    // URL untuk kinerja harian
-    const url = "https://e-kinerja.babelprov.go.id/v1/index.php?r=kinerja%2Fkegiatan-harian%2Findex-v4";
+    let csrfToken = $('input[name="_csrf"]').val() || $('meta[name="csrf-token"]').attr("content");
 
-    const response = await axios.get(url, {
-      headers: {
-        Cookie: cookieHeader,
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
-        Referer: "https://e-kinerja.babelprov.go.id/v1/index.php",
-      },
-      timeout: 30000,
-    });
-
-    console.log(`✅ Response status: ${response.status}`);
-
-    if (response.data.includes("site/login")) {
-      console.log(`❌ Redirected to login page for ${chatId}`);
-      return bot.sendMessage(chatId, "⚠️ Session expired. Silakan login ulang dengan /login");
-    }
-
-    const $ = cheerio.load(response.data);
-
-    let message = `📊 *KINERJA HARIAN* - ${formattedDate}\n\n`;
-
-    // Cari tabel dengan class table-bordered
-    const table = $("table.table-bordered");
-
-    if (table.length === 0) {
-      message += "Tidak ada data kinerja harian yang ditemukan.\n";
-      message += "Silakan isi kinerja harian melalui:\n";
-      message += "👉 [Halaman Input Kinerja](https://e-kinerja.babelprov.go.id/v1/index.php?r=kinerja%2Fkegiatan-harian%2Fcreate-v4)";
-
-      await bot.sendMessage(chatId, message, {
-        parse_mode: "Markdown",
-        disable_web_page_preview: true,
-      });
+    if (!csrfToken) {
+      console.log("❌ CSRF tidak ditemukan");
       return;
     }
 
-    // Variabel untuk menyimpan jenis kinerja saat ini
-    let currentJenis = "";
-    let hasData = false;
-    let hasTodayData = false;
-    let todayDataCount = 0;
-    let totalDataCount = 0;
+    // 2. POST data
+    const form = new URLSearchParams();
 
-    // Iterasi setiap baris dalam tabel
-    const rows = table.find("tr");
+    form.append("_csrf", csrfToken);
+    form.append("KegiatanHarian[uraian]", "Melaksanakan tugas tambahan kedinasan lainnya");
+    form.append("KegiatanHarian[realisasi]", "1");
 
-    rows.each((index, row) => {
-      const $row = $(row);
+    const postUrl = "https://e-kinerja.babelprov.go.id/v1/index.php?r=kinerja%2Fkegiatan-harian%2Fcreate-v4&id_kegiatan_harian_jenis=2";
 
-      // Cek apakah baris ini adalah judul jenis (Utama/Tambahan)
-      const jenisTh = $row.find('th[colspan="8"]');
-      if (jenisTh.length) {
-        const jenisText = jenisTh.text().trim();
-        if (jenisText === "Utama" || jenisText === "Tambahan") {
-          currentJenis = jenisText;
-        }
-        return; // Lewati baris judul
-      }
-
-      // Baris data: harus memiliki setidaknya 8 kolom (td)
-      const cols = $row.find("td");
-      if (cols.length >= 8) {
-        hasData = true;
-        totalDataCount++;
-
-        // Ekstrak data dari kolom sesuai struktur HTML
-        const no = $(cols[1]).text().trim();
-        const tanggal = $(cols[2]).text().trim();
-        const uraianHTML = $(cols[3]).html();
-        const aspek = $(cols[4]).text().trim();
-        const indikator = $(cols[5]).text().trim();
-        const realisasi = $(cols[6]).text().trim();
-
-        // Cek apakah ini data untuk hari ini dengan fungsi yang lebih akurat
-        const isToday = isHariIni(tanggal);
-
-        if (isToday) {
-          hasTodayData = true;
-          todayDataCount++;
-          console.log(`✅ Found today's data: ${tanggal}`);
-        }
-
-        // Parse status dari uraian (ada dalam span dengan class label)
-        let status = "Konsep";
-        if (uraianHTML) {
-          const $uraian = cheerio.load(uraianHTML);
-          const statusSpan = $uraian("span.label");
-          if (statusSpan.length) {
-            status = statusSpan.text().trim();
-          }
-        }
-
-        // Bersihkan uraian dari tag HTML dan nama
-        let cleanUraian = "";
-        if (uraianHTML) {
-          let tempUraian = uraianHTML.replace(/<span[^>]*>.*?<\/span>/gi, "");
-          tempUraian = tempUraian.replace(/<i[^>]*>.*?<\/i>/gi, "");
-          tempUraian = tempUraian.split(/<br\s*\/?>/i)[0];
-          cleanUraian = tempUraian.replace(/<[^>]*>/g, "");
-          cleanUraian = cleanUraian.replace(/\s+/g, " ").trim();
-        }
-
-        // Format output
-        message += `*Jenis Kinerja:* ${currentJenis}\n`;
-        message += `*No:* ${no}\n`;
-        message += `*Tanggal:* ${tanggal}`;
-
-        // Tambahkan indikator jika ini data hari ini
-        if (isToday) {
-          message += ` 🆕`;
-        }
-
-        message += `\n`;
-        message += `*Uraian:* ${cleanUraian}\n`;
-        if (aspek && aspek !== "" && aspek !== "&nbsp;") {
-          message += `*Aspek:* ${aspek}\n`;
-        }
-        if (indikator && indikator !== "" && indikator !== "&nbsp;") {
-          message += `*Indikator Kinerja Individu:* ${indikator}\n`;
-        }
-        if (realisasi && realisasi !== "" && realisasi !== "&nbsp;") {
-          message += `*Realisasi:* ${realisasi}\n`;
-        }
-        message += `*Status:* ${status}\n`;
-        message += `\n──────────\n\n`;
-      }
+    await axios.post(postUrl, form, {
+      headers: {
+        Cookie: cookieHeader,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
     });
 
-    // Tampilkan summary
-    message += `📋 *SUMMARY*\n`;
-    message += `Total data: ${hasData ? "Ada" : "Tidak ada"}\n`;
+    console.log(`✅ Auto kinerja tambahan berhasil: ${chatId}`);
 
-    // Tampilkan informasi yang lebih akurat
-    if (hasTodayData) {
-      message += `Data hari ini: ✅ *Ada (${todayDataCount} entri)*\n\n`;
-      message += `🎉 Bagus! Anda sudah mengisi kinerja untuk hari ini.\n`;
-      message += `Tetap pertahankan konsistensi Anda!\n`;
-    } else {
-      message += `Data hari ini: ❌ *Belum ada*\n\n`;
-
-      // Tambahkan reminder jika tidak ada data untuk hari ini
-      message += `⚠️ *REMINDER*\n`;
-      message += `Anda belum mengisi kinerja harian untuk hari ini (${formattedDate}).\n`;
-      message += `Silakan isi melalui link berikut:\n`;
-      message += `👉 [Input Kinerja Harian](https://e-kinerja.babelprov.go.id/v1/index.php?r=kinerja%2Fkegiatan-harian%2Fcreate-v4)\n\n`;
-
-      // Hitung sisa waktu hingga jam 23:00
-      const hoursLeft = 23 - now.getHours();
-      const minutesLeft = 60 - now.getMinutes();
-
-      if (hoursLeft > 0 || (hoursLeft === 0 && minutesLeft > 0)) {
-        message += `⏰ *Waktu tersisa:* ${hoursLeft} jam ${minutesLeft} menit\n`;
-
-        // Berikan saran berdasarkan waktu
-        if (now.getHours() >= 21) {
-          message += `💡 *Saran:* Segera isi! Hampir tutup (batas jam 23:00)!\n`;
-        } else if (now.getHours() >= 18) {
-          message += `💡 *Saran:* Isi sekarang sebelum malam!\n`;
-        } else if (now.getHours() >= 16) {
-          message += `💡 *Saran:* Isi sebelum jam 23:00\n`;
-        } else {
-          message += `💡 *Saran:* Isi kapan saja sebelum jam 23:00\n`;
-        }
-      } else {
-        message += `⏰ *Waktu telah habis* (batas jam 23:00)\n`;
-        message += `💡 *Saran:* Isi untuk besok atau gunakan fitur backdate jika diizinkan.\n`;
-      }
-    }
-
-    // Jika tidak ada data sama sekali
-    if (!hasData) {
-      message += "📭 *Tidak ada data kinerja harian sama sekali.*\n\n";
-      message += "Silakan isi kinerja harian melalui:\n";
-      message += "👉 [Halaman Input Kinerja](https://e-kinerja.babelprov.go.id/v1/index.php?r=kinerja%2Fkegiatan-harian%2Fcreate-v4)\n";
-    }
-
-    // Truncate jika terlalu panjang
-    if (message.length > 4000) {
-      message = message.substring(0, 4000) + "\n... (pesan dipotong karena terlalu panjang)";
-    }
-
-    await bot.sendMessage(chatId, message, {
-      parse_mode: "Markdown",
-      disable_web_page_preview: true,
-    });
-
-    console.log(`✅ Daily performance report sent to ${chatId}`);
-    console.log(`📊 Has today data: ${hasTodayData}, Count: ${todayDataCount}, Total: ${totalDataCount}`);
+    await bot.sendMessage(chatId, "🤖 *AUTO KINERJA*\n\nSistem otomatis mengisi *kinerja tambahan* karena Anda belum mengisi hingga pukul 16:00.", { parse_mode: "Markdown" });
   } catch (err) {
-    console.log("KINERJA ERROR DETAIL:", err.message);
-    console.log("Status:", err.response?.status);
-
-    let errorMessage = "❌ Gagal mengambil data kinerja harian\n";
-
-    if (err.response?.status === 403) {
-      errorMessage += "\n🔒 *Error 403 - Forbidden*\n";
-      errorMessage += "Akses ditolak ke halaman kinerja.\n";
-      errorMessage += "Coba login ulang dengan /login dan pastikan Anda bisa mengakses halaman kinerja via browser.";
-    } else if (err.code === "ECONNREFUSED") {
-      errorMessage += "\n🌐 Tidak bisa terhubung ke server e-Kinerja";
-    } else {
-      errorMessage += `\n📄 Error: ${err.message}`;
-    }
-
-    await bot.sendMessage(chatId, errorMessage, { parse_mode: "Markdown" });
+    console.log("AUTO FILL ERROR:", err.message);
   }
 }
 
+// ==========================
+// CHECK & REMINDER
+// ==========================
 async function checkTodayPerformance(chatId) {
   const bot = require("../bot/telegramBot");
 
-  // Check if session exists
   const cookies = loadCookies(chatId);
   if (!cookies) return;
 
-  // State untuk menghindari spam reminder
   const now = getJakartaTime();
   const today = now.toLocaleDateString("sv-SE");
   const hour = now.getHours();
   const minute = now.getMinutes();
 
-  // Rentang pengecekan: jam 8:00 - 23:00
+  // hanya jam kerja
   if (hour < 8 || hour >= 23) {
-    console.log(`⏰ Skip performance check for ${chatId} - outside working hours (${hour}:${minute})`);
-
-    // Reset state jika sudah lewat jam 23:00 untuk persiapan hari berikutnya
     if (hour >= 23 && performanceReminderState[chatId]) {
-      console.log(`🔄 Resetting performance state for ${chatId} for next day`);
       delete performanceReminderState[chatId];
     }
     return;
   }
 
-  // Initialize state
+  // init state
   if (!performanceReminderState[chatId]) {
     performanceReminderState[chatId] = {
       tanggal: today,
       telahDiingatkan: false,
       reminderCount: 0,
       lastReminderHour: null,
+      sudahAutoIsi: false,
     };
   }
 
-  // Reset state jika hari baru
+  // reset harian
   if (performanceReminderState[chatId].tanggal !== today) {
     performanceReminderState[chatId] = {
       tanggal: today,
       telahDiingatkan: false,
       reminderCount: 0,
       lastReminderHour: null,
+      sudahAutoIsi: false,
     };
-    console.log(`🔄 Reset performance state for ${chatId}`);
-  }
-
-  // Skip jika sudah diingatkan hari ini dan sudah jam 23:00
-  if (performanceReminderState[chatId].telahDiingatkan && hour >= 23) {
-    console.log(`⏩ Skip performance check for ${chatId} - already reminded and it's past 23:00`);
-    return;
-  }
-
-  // Maksimal 3 reminder per hari
-  if (performanceReminderState[chatId].reminderCount >= 3) {
-    performanceReminderState[chatId].telahDiingatkan = true;
-    console.log(`🛑 Max reminders reached for ${chatId}`);
-    return;
-  }
-
-  // Cek interval reminder: minimal 2 jam antara reminder
-  const lastReminderHour = performanceReminderState[chatId].lastReminderHour;
-  if (lastReminderHour !== null && hour - lastReminderHour < 2) {
-    console.log(`⏳ Skip performance check for ${chatId} - reminder interval too short (${hour}:${minute})`);
-    return;
   }
 
   try {
-    console.log(`🔍 Checking daily performance for ${chatId} at ${hour}:${minute}`);
-
-    // Pastikan session valid
     await ensureLogin(chatId);
-    const freshCookies = loadCookies(chatId);
-    const cookieHeader = buildCookieHeader(freshCookies);
+
+    const cookieHeader = buildCookieHeader(loadCookies(chatId));
 
     const url = "https://e-kinerja.babelprov.go.id/v1/index.php?r=kinerja%2Fkegiatan-harian%2Findex-v4";
 
     const response = await axios.get(url, {
-      headers: {
-        Cookie: cookieHeader,
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
-      },
-      timeout: 15000,
+      headers: { Cookie: cookieHeader },
     });
 
-    if (response.data.includes("site/login")) {
-      console.log(`❌ Session expired for ${chatId} during performance check`);
-      return;
-    }
+    if (response.data.includes("site/login")) return;
 
     const $ = cheerio.load(response.data);
 
-    // Cari data untuk hari ini
     let hasPerformanceToday = false;
-    const todayFormatted = getTanggalHariIni();
 
-    // Cek di tabel
-    $("table.table-bordered tr").each((index, row) => {
+    $("table.table-bordered tr").each((i, row) => {
       const cols = $(row).find("td");
       if (cols.length >= 8) {
-        const tanggalCell = $(cols[2]).text().trim();
-
-        // Cek apakah ini data untuk hari ini dengan fungsi yang lebih akurat
-        const isToday = isHariIni(tanggalCell);
-
-        if (isToday) {
+        const tanggal = $(cols[2]).text().trim();
+        if (isHariIni(tanggal)) {
           hasPerformanceToday = true;
-          console.log(`✅ Found performance for today: ${tanggalCell}`);
-          return false; // Break loop
+          return false;
         }
       }
     });
 
-    // Kirim reminder jika belum ada kinerja
+    // ==========================
+    // AUTO FILL JAM 16
+    // ==========================
+    if (hour >= 16 && !hasPerformanceToday && !performanceReminderState[chatId].sudahAutoIsi) {
+      await autoFillKinerjaTambahan(chatId);
+      performanceReminderState[chatId].sudahAutoIsi = true;
+    }
+
+    // ==========================
+    // REMINDER
+    // ==========================
     if (!hasPerformanceToday) {
-      const reminderTime = `${hour.toString().padStart(2, "0")}:${minute.toString().padStart(2, "0")}`;
+      if (performanceReminderState[chatId].reminderCount >= 3) return;
 
-      // Format pesan reminder
-      let reminderMessage = `📝 *REMINDER KINERJA HARIAN* (${reminderTime})\n\n`;
-      reminderMessage += `Hari ini Anda belum mengisi kinerja harian.\n\n`;
+      if (performanceReminderState[chatId].lastReminderHour !== null && hour - performanceReminderState[chatId].lastReminderHour < 2) return;
 
-      // Hitung waktu tersisa sampai jam 23:00
-      const hoursLeft = 23 - hour;
-      const minutesLeft = 60 - minute;
+      let msg = `📝 *REMINDER KINERJA*\n\n`;
+      msg += `Anda belum mengisi kinerja hari ini.\n\n`;
 
-      // Berikan saran berdasarkan waktu
-      if (hour >= 21) {
-        reminderMessage += `⏰ *WAKTU HAMPIR HABIS!*\n`;
-        reminderMessage += `Hanya tersisa ${hoursLeft} jam ${minutesLeft} menit sebelum batas jam 23:00.\n`;
-        reminderMessage += `Segera isi kinerja harian Anda!\n\n`;
-      } else if (hour >= 18) {
-        reminderMessage += `⏰ *WAKTU MENIPIS!*\n`;
-        reminderMessage += `Tersisa ${hoursLeft} jam ${minutesLeft} menit sebelum batas jam 23:00.\n`;
-        reminderMessage += `Jangan tunda hingga malam!\n\n`;
-      } else if (hour >= 16) {
-        reminderMessage += `⏰ *PERHATIAN!*\n`;
-        reminderMessage += `Tersisa ${hoursLeft} jam ${minutesLeft} menit sebelum batas jam 23:00.\n`;
-        reminderMessage += `Selesaikan sebelum malam!\n\n`;
-      } else {
-        reminderMessage += `⏰ *Ingat!* Batas pengisian jam 23:00.\n`;
-        reminderMessage += `Tersisa ${hoursLeft} jam ${minutesLeft} menit.\n\n`;
-      }
+      if (hour >= 21) msg += `⚠️ Hampir habis!\n`;
+      else if (hour >= 18) msg += `⏰ Waktu menipis\n`;
 
-      reminderMessage += `👉 [Input Kinerja Utama](https://e-kinerja.babelprov.go.id/v1/index.php?r=kinerja%2Fkegiatan-harian%2Fcreate-v4&id_kegiatan_harian_jenis=1)\n`;
-      reminderMessage += `👉 [Input Kinerja Tambahan](https://e-kinerja.babelprov.go.id/v1/index.php?r=kinerja%2Fkegiatan-harian%2Fcreate-v4&id_kegiatan_harian_jenis=2)\n\n`;
-      reminderMessage += `_Reminder ${performanceReminderState[chatId].reminderCount + 1}/3 hari ini_`;
+      msg += `👉 [Isi Sekarang](https://e-kinerja.babelprov.go.id/v1/index.php?r=kinerja%2Fkegiatan-harian%2Fcreate-v4)\n`;
 
-      await bot.sendMessage(chatId, reminderMessage, {
+      await bot.sendMessage(chatId, msg, {
         parse_mode: "Markdown",
         disable_web_page_preview: true,
       });
 
-      performanceReminderState[chatId].reminderCount += 1;
+      performanceReminderState[chatId].reminderCount++;
       performanceReminderState[chatId].lastReminderHour = hour;
-
-      console.log(`✅ Performance reminder sent to ${chatId} (Reminder ${performanceReminderState[chatId].reminderCount}/3)`);
-
-      // Setelah jam 22:00 atau sudah 3 reminder, anggap sudah diingatkan
-      if (hour >= 22 || performanceReminderState[chatId].reminderCount >= 3) {
-        performanceReminderState[chatId].telahDiingatkan = true;
-        console.log(`✅ Marked as reminded for ${chatId}`);
-      }
     } else {
-      console.log(`✅ ${chatId} already has performance data, no reminder needed`);
       performanceReminderState[chatId].telahDiingatkan = true;
     }
   } catch (err) {
-    console.log("PERFORMANCE REMINDER ERROR:", err.message);
-    // Jangan mengirim error ke user untuk menghindari spam
+    console.log("CHECK ERROR:", err.message);
   }
 }
 
 module.exports = {
-  getDailyPerformanceReport,
   checkTodayPerformance,
   getTanggalHariIni,
   isHariIni,
+  autoFillKinerjaTambahan,
 };

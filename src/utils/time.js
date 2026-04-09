@@ -82,9 +82,20 @@ function predictGoHomeTime(times, targetHours = 7.5) {
   return fromSeconds(lastIn + remaining);
 }
 
+function getTargetWorkHours(custom = null) {
+  if (custom) return Number(custom);
+
+  if (process.env.TARGET_JAM_KERJA) {
+    return Number(process.env.TARGET_JAM_KERJA);
+  }
+
+  return 7.5; // fallback default
+}
+
 module.exports = {
   calculateWorkHours,
   getJakartaTime,
   calculateWorkDurationWithBreak,
   predictGoHomeTime,
+  getTargetWorkHours,
 };

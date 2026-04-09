@@ -2,10 +2,11 @@ const axios = require("axios");
 const cheerio = require("cheerio");
 const { loadCookies, buildCookieHeader } = require("./sessionService");
 const { ensureLogin } = require("./authService");
-const { getJakartaTime, calculateWorkHours, calculateWorkDurationWithBreak, predictGoHomeTime } = require("../utils/time");
+const { getJakartaTime, calculateWorkHours, calculateWorkDurationWithBreak, predictGoHomeTime, getTargetWorkHours } = require("../utils/time");
 const { attendanceReminderState } = require("../state/memoryState");
 
 async function checkTodayAttendance(chatId) {
+  const TARGET_JAM = getTargetWorkHours();
   const bot = require("../bot/telegramBot");
   const cookies = loadCookies(chatId);
   if (!cookies) return;
@@ -67,10 +68,10 @@ async function checkTodayAttendance(chatId) {
 
     // 🔔 Belum absen pulang
     if (times.length === 1) {
-      const prediksi = predictGoHomeTime(times);
+      const prediksi = predictGoHomeTime(times, TARGET_JAM);
 
       if ((hour > 16 || (hour === 16 && minute >= 30)) && !state.pulang) {
-        await bot.sendMessage(chatId, `🔔 Anda belum absen pulang.\nMasuk: ${times[0]}\nEstimasi cukup jam: ${prediksi}`);
+        await bot.sendMessage(chatId, `🔔 Anda belum absen pulang.\nMasuk: ${times[0]}\nEstimasi cukup jam (${TARGET_JAM} jam): ${prediksi}`);
         state.pulang = true;
       }
       return;
@@ -80,8 +81,8 @@ async function checkTodayAttendance(chatId) {
     if (times.length >= 2) {
       const durasi = calculateWorkDurationWithBreak(times);
 
-      if (durasi < 7.5 && !state.kurangJam) {
-        await bot.sendMessage(chatId, `⚠️ Jam kerja kurang dari 7,5 jam!\n` + `Total: ${durasi.toFixed(2)} jam`);
+      if (durasi < TARGET_JAM && !state.kurangJam) {
+        await bot.sendMessage(chatId, `⚠️ Jam kerja kurang dari ${TARGET_JAM} jam!\nTotal: ${durasi.toFixed(2)} jam`);
         state.kurangJam = true;
       }
     }
@@ -91,6 +92,7 @@ async function checkTodayAttendance(chatId) {
 }
 
 async function getAttendanceReport(chatId, bulan = null) {
+  const TARGET_JAM = getTargetWorkHours();
   const bot = require("../bot/telegramBot");
   const cookies = loadCookies(chatId);
 
@@ -155,10 +157,10 @@ async function getAttendanceReport(chatId, bulan = null) {
 
       // 🔥 Prediksi pulang jika belum absen
       if (times.length === 1) {
-        const prediksi = predictGoHomeTime(times);
+        const prediksi = predictGoHomeTime(times, TARGET_JAM);
 
         if (prediksi) {
-          rincian += `🏁 Estimasi Pulang : ${prediksi} (7,5 jam)\n`;
+          rincian += `🏁 Estimasi Pulang : ${prediksi} (${TARGET_JAM} jam)\n`;
         }
       }
 

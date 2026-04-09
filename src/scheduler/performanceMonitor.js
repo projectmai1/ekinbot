@@ -1,5 +1,4 @@
 const fs = require("fs");
-const path = require("path");
 const { checkTodayPerformance } = require("../services/performanceReminderService");
 const config = require("../config");
 
@@ -7,7 +6,6 @@ async function runPerformanceMonitor() {
   try {
     const sessionDir = config.SESSION_DIR;
 
-    // ambil semua file session
     const files = fs.readdirSync(sessionDir);
 
     if (!files.length) {
@@ -15,13 +13,17 @@ async function runPerformanceMonitor() {
       return;
     }
 
-    console.log(`👥 Monitoring ${files.length} user`);
+    console.log(`👥 Monitoring ${files.length} file session`);
 
     for (const file of files) {
-      try {
-        // biasanya nama file = chatId.json
-        const chatId = file.replace(".json", "");
+      // 🔥 FILTER PENTING
+      if (!file.endsWith(".json") || file.includes("-cookies")) continue;
 
+      const chatId = file.replace(".json", "");
+
+      console.log(`👤 Checking performance for ${chatId}`);
+
+      try {
         await checkTodayPerformance(chatId);
       } catch (err) {
         console.log("❌ Error user:", file, err.message);

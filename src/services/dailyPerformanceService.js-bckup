@@ -304,8 +304,180 @@ async function getDailyPerformanceReport(chatId) {
   }
 }
 
+async function checkTodayPerformance(chatId) {
+  const bot = require("../bot/telegramBot");
+
+  // Check if session exists
+  const cookies = loadCookies(chatId);
+  if (!cookies) return;
+
+  // State untuk menghindari spam reminder
+  const now = getJakartaTime();
+  const today = now.toLocaleDateString("sv-SE");
+  const hour = now.getHours();
+  const minute = now.getMinutes();
+
+  // Rentang pengecekan: jam 8:00 - 23:00
+  if (hour < 8 || hour >= 23) {
+    console.log(`⏰ Skip performance check for ${chatId} - outside working hours (${hour}:${minute})`);
+
+    // Reset state jika sudah lewat jam 23:00 untuk persiapan hari berikutnya
+    if (hour >= 23 && performanceReminderState[chatId]) {
+      console.log(`🔄 Resetting performance state for ${chatId} for next day`);
+      delete performanceReminderState[chatId];
+    }
+    return;
+  }
+
+  // Initialize state
+  if (!performanceReminderState[chatId]) {
+    performanceReminderState[chatId] = {
+      tanggal: today,
+      telahDiingatkan: false,
+      reminderCount: 0,
+      lastReminderHour: null,
+    };
+  }
+
+  // Reset state jika hari baru
+  if (performanceReminderState[chatId].tanggal !== today) {
+    performanceReminderState[chatId] = {
+      tanggal: today,
+      telahDiingatkan: false,
+      reminderCount: 0,
+      lastReminderHour: null,
+    };
+    console.log(`🔄 Reset performance state for ${chatId}`);
+  }
+
+  // Skip jika sudah diingatkan hari ini dan sudah jam 23:00
+  if (performanceReminderState[chatId].telahDiingatkan && hour >= 23) {
+    console.log(`⏩ Skip performance check for ${chatId} - already reminded and it's past 23:00`);
+    return;
+  }
+
+  // Maksimal 3 reminder per hari
+  if (performanceReminderState[chatId].reminderCount >= 3) {
+    performanceReminderState[chatId].telahDiingatkan = true;
+    console.log(`🛑 Max reminders reached for ${chatId}`);
+    return;
+  }
+
+  // Cek interval reminder: minimal 2 jam antara reminder
+  const lastReminderHour = performanceReminderState[chatId].lastReminderHour;
+  if (lastReminderHour !== null && hour - lastReminderHour < 2) {
+    console.log(`⏳ Skip performance check for ${chatId} - reminder interval too short (${hour}:${minute})`);
+    return;
+  }
+
+  try {
+    console.log(`🔍 Checking daily performance for ${chatId} at ${hour}:${minute}`);
+
+    // Pastikan session valid
+    await ensureLogin(chatId);
+    const freshCookies = loadCookies(chatId);
+    const cookieHeader = buildCookieHeader(freshCookies);
+
+    const url = "https://e-kinerja.babelprov.go.id/v1/index.php?r=kinerja%2Fkegiatan-harian%2Findex-v4";
+
+    const response = await axios.get(url, {
+      headers: {
+        Cookie: cookieHeader,
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+      },
+      timeout: 15000,
+    });
+
+    if (response.data.includes("site/login")) {
+      console.log(`❌ Session expired for ${chatId} during performance check`);
+      return;
+    }
+
+    const $ = cheerio.load(response.data);
+
+    // Cari data untuk hari ini
+    let hasPerformanceToday = false;
+    const todayFormatted = getTanggalHariIni();
+
+    // Cek di tabel
+    $("table.table-bordered tr").each((index, row) => {
+      const cols = $(row).find("td");
+      if (cols.length >= 8) {
+        const tanggalCell = $(cols[2]).text().trim();
+
+        // Cek apakah ini data untuk hari ini dengan fungsi yang lebih akurat
+        const isToday = isHariIni(tanggalCell);
+
+        if (isToday) {
+          hasPerformanceToday = true;
+          console.log(`✅ Found performance for today: ${tanggalCell}`);
+          return false; // Break loop
+        }
+      }
+    });
+
+    // Kirim reminder jika belum ada kinerja
+    if (!hasPerformanceToday) {
+      const reminderTime = `${hour.toString().padStart(2, "0")}:${minute.toString().padStart(2, "0")}`;
+
+      // Format pesan reminder
+      let reminderMessage = `📝 *REMINDER KINERJA HARIAN* (${reminderTime})\n\n`;
+      reminderMessage += `Hari ini Anda belum mengisi kinerja harian.\n\n`;
+
+      // Hitung waktu tersisa sampai jam 23:00
+      const hoursLeft = 23 - hour;
+      const minutesLeft = 60 - minute;
+
+      // Berikan saran berdasarkan waktu
+      if (hour >= 21) {
+        reminderMessage += `⏰ *WAKTU HAMPIR HABIS!*\n`;
+        reminderMessage += `Hanya tersisa ${hoursLeft} jam ${minutesLeft} menit sebelum batas jam 23:00.\n`;
+        reminderMessage += `Segera isi kinerja harian Anda!\n\n`;
+      } else if (hour >= 18) {
+        reminderMessage += `⏰ *WAKTU MENIPIS!*\n`;
+        reminderMessage += `Tersisa ${hoursLeft} jam ${minutesLeft} menit sebelum batas jam 23:00.\n`;
+        reminderMessage += `Jangan tunda hingga malam!\n\n`;
+      } else if (hour >= 16) {
+        reminderMessage += `⏰ *PERHATIAN!*\n`;
+        reminderMessage += `Tersisa ${hoursLeft} jam ${minutesLeft} menit sebelum batas jam 23:00.\n`;
+        reminderMessage += `Selesaikan sebelum malam!\n\n`;
+      } else {
+        reminderMessage += `⏰ *Ingat!* Batas pengisian jam 23:00.\n`;
+        reminderMessage += `Tersisa ${hoursLeft} jam ${minutesLeft} menit.\n\n`;
+      }
+
+      reminderMessage += `👉 [Input Kinerja Utama](https://e-kinerja.babelprov.go.id/v1/index.php?r=kinerja%2Fkegiatan-harian%2Fcreate-v4&id_kegiatan_harian_jenis=1)\n`;
+      reminderMessage += `👉 [Input Kinerja Tambahan](https://e-kinerja.babelprov.go.id/v1/index.php?r=kinerja%2Fkegiatan-harian%2Fcreate-v4&id_kegiatan_harian_jenis=2)\n\n`;
+      reminderMessage += `_Reminder ${performanceReminderState[chatId].reminderCount + 1}/3 hari ini_`;
+
+      await bot.sendMessage(chatId, reminderMessage, {
+        parse_mode: "Markdown",
+        disable_web_page_preview: true,
+      });
+
+      performanceReminderState[chatId].reminderCount += 1;
+      performanceReminderState[chatId].lastReminderHour = hour;
+
+      console.log(`✅ Performance reminder sent to ${chatId} (Reminder ${performanceReminderState[chatId].reminderCount}/3)`);
+
+      // Setelah jam 22:00 atau sudah 3 reminder, anggap sudah diingatkan
+      if (hour >= 22 || performanceReminderState[chatId].reminderCount >= 3) {
+        performanceReminderState[chatId].telahDiingatkan = true;
+        console.log(`✅ Marked as reminded for ${chatId}`);
+      }
+    } else {
+      console.log(`✅ ${chatId} already has performance data, no reminder needed`);
+      performanceReminderState[chatId].telahDiingatkan = true;
+    }
+  } catch (err) {
+    console.log("PERFORMANCE REMINDER ERROR:", err.message);
+    // Jangan mengirim error ke user untuk menghindari spam
+  }
+}
+
 module.exports = {
   getDailyPerformanceReport,
+  checkTodayPerformance,
   getTanggalHariIni,
   isHariIni,
 };

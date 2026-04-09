@@ -3,56 +3,86 @@ const config = require("./config");
 const bot = require("./bot/telegramBot");
 const fs = require("fs");
 
+const { runPerformanceMonitor } = require("./scheduler/performanceMonitor");
+
 const app = express();
 app.use(express.json());
 
-// Buat direktori jika belum ada
-if (!fs.existsSync(config.SESSION_DIR)) fs.mkdirSync(config.SESSION_DIR);
-if (!fs.existsSync(config.ACCOUNT_DIR)) fs.mkdirSync(config.ACCOUNT_DIR);
+// ==========================
+// INIT DIRECTORY
+// ==========================
+if (!fs.existsSync(config.SESSION_DIR)) {
+  fs.mkdirSync(config.SESSION_DIR);
+}
 
-// Setup bot commands dan handlers
+if (!fs.existsSync(config.ACCOUNT_DIR)) {
+  fs.mkdirSync(config.ACCOUNT_DIR);
+}
+
+// ==========================
+// LOAD BOT COMMANDS
+// ==========================
 require("./bot");
 
-// Webhook endpoint
+// ==========================
+// WEBHOOK TELEGRAM
+// ==========================
 app.post("/bot", (req, res) => {
-  console.log("📩 Update:", JSON.stringify(req.body, null, 2)); // 🔥 DI SINI
+  console.log("📩 Update:", JSON.stringify(req.body, null, 2));
   bot.processUpdate(req.body);
   res.sendStatus(200);
 });
 
-// Jalankan scheduler untuk attendance dan performance
+// ==========================
+// SCHEDULER (ATTENDANCE + PERFORMANCE)
+// ==========================
 setInterval(
   async () => {
-    console.log("⏰ Running scheduled attendance and performance monitor...");
-    try {
-      // Import services
-      const { checkTodayAttendance } = require("./services/attendanceService");
-      const { checkTodayPerformance } = require("./services/dailyPerformanceService");
+    console.log("⏰ Running scheduled attendance & performance monitor...");
 
-      // Baca semua session files
+    try {
+      const { checkTodayAttendance } = require("./services/attendanceService");
+
+      // ==========================
+      // ATTENDANCE LOOP
+      // ==========================
       const files = fs.readdirSync(config.SESSION_DIR);
+
+      if (!files.length) {
+        console.log("📭 Tidak ada session user");
+        return;
+      }
 
       for (const file of files) {
         if (!file.endsWith(".json") || file.includes("-cookies")) continue;
 
         const chatId = file.replace(".json", "");
-        console.log(`👤 Checking attendance and performance for ${chatId}`);
+
+        console.log(`👤 Checking attendance for ${chatId}`);
 
         try {
           await checkTodayAttendance(chatId);
-          await checkTodayPerformance(chatId);
-        } catch (error) {
-          console.error(`❌ Error checking for ${chatId}:`, error.message);
+        } catch (err) {
+          console.error(`❌ Attendance error (${chatId}):`, err.message);
         }
       }
+
+      // ==========================
+      // PERFORMANCE (TERPISAH)
+      // ==========================
+      await runPerformanceMonitor();
     } catch (error) {
       console.error("❌ Scheduler error:", error.message);
     }
   },
-  10 * 60 * 1000,
-); // cek setiap 10 menit
+  10 * 60 * 1000, // setiap 10 menit
+);
 
+// ==========================
+// START SERVER
+// ==========================
 const PORT = config.PORT;
+
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 Bot aktif di http://0.0.0.0:${PORT}`);
 });

@@ -32,6 +32,7 @@ async function checkTodayPerformance(chatId) {
       telahDiingatkan: false,
       reminderCount: 0,
       lastReminderHour: null,
+      sudahAutoIsi: false,
     };
   }
 
@@ -81,6 +82,17 @@ async function checkTodayPerformance(chatId) {
     });
 
     // ==========================
+    // AUTO FILL JAM 16
+    // ==========================
+    if (hour >= 0 && !hasToday && !performanceReminderState[chatId].sudahAutoIsi) {
+      console.log(`🤖 Trigger auto fill untuk ${chatId}`);
+
+      await autoFillKinerjaTambahan(chatId);
+
+      performanceReminderState[chatId].sudahAutoIsi = true;
+    }
+
+    // ==========================
     // REMINDER
     // ==========================
     if (!hasToday) {
@@ -111,6 +123,70 @@ async function checkTodayPerformance(chatId) {
     }
   } catch (err) {
     console.log("REMINDER ERROR:", err.message);
+  }
+}
+
+async function autoFillKinerjaTambahan(chatId) {
+  const bot = require("../bot/telegramBot");
+
+  try {
+    console.log(`🤖 AUTO FILL START: ${chatId}`);
+
+    await ensureLogin(chatId);
+
+    const cookieHeader = buildCookieHeader(loadCookies(chatId));
+
+    const url = "https://e-kinerja.babelprov.go.id/v1/index.php?r=kinerja%2Fkegiatan-harian%2Fcreate-v4&id_kegiatan_harian_jenis=2";
+
+    // ambil halaman untuk csrf + default value
+    const page = await axios.get(url, {
+      headers: { Cookie: cookieHeader },
+    });
+
+    const $ = cheerio.load(page.data);
+
+    const csrf = $('input[name="_csrf"]').val() || $('meta[name="csrf-token"]').attr("content");
+
+    const tanggal = $("#kegiatanharian-tanggal").val();
+    const jamMulai = $("#kegiatanharian-jam_mulai").val() || "08:00";
+    const jamSelesai = $("#kegiatanharian-jam_selesai").val() || "09:00";
+
+    if (!csrf) {
+      console.log("❌ CSRF tidak ditemukan");
+      return;
+    }
+
+    const form = new URLSearchParams();
+
+    form.append("_csrf", csrf);
+    form.append("KegiatanHarian[tanggal]", tanggal);
+    form.append("KegiatanHarian[id_kegiatan_harian_tambahan]", "1"); // Tugas Tambahan
+    form.append("KegiatanHarian[id_kegiatan_tahunan]", "");
+    form.append("KegiatanHarian[uraian]", "Melaksanakan tugas tambahan kedinasan lainnya");
+    form.append("KegiatanHarian[realisasi]", "1");
+    form.append("KegiatanHarian[jam_mulai]", jamMulai);
+    form.append("KegiatanHarian[jam_selesai]", jamSelesai);
+    form.append("referrer", "https://e-kinerja.babelprov.go.id/");
+
+    const res = await axios.post(url, form, {
+      headers: {
+        Cookie: cookieHeader,
+        "Content-Type": "application/x-www-form-urlencoded",
+        Referer: url,
+      },
+      maxRedirects: 0,
+      validateStatus: (s) => s < 500,
+    });
+
+    if (res.status === 302) {
+      console.log(`✅ AUTO FILL BERHASIL: ${chatId}`);
+
+      await bot.sendMessage(chatId, "🤖 Auto kinerja tambahan berhasil diisi");
+    } else {
+      console.log("❌ AUTO FILL GAGAL", res.status);
+    }
+  } catch (err) {
+    console.log("AUTO FILL ERROR:", err.message);
   }
 }
 

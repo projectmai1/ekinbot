@@ -4,6 +4,22 @@ const { loadAccount, saveAccount } = require("../services/accountService");
 const { doLogin } = require("../services/authService");
 const { decrypt, encrypt } = require("../services/encryptionService");
 const kinerjaInputService = require("../services/kinerjaInputService");
+const Jimp = require("jimp");
+const QrCode = require("qrcode-reader");
+const axios = require("axios");
+
+async function decodeQR(buffer) {
+  const image = await Jimp.read(buffer);
+
+  const qr = new QrCode();
+  return new Promise((resolve, reject) => {
+    qr.callback = (err, value) => {
+      if (err) return reject(err);
+      resolve(value.result);
+    };
+    qr.decode(image.bitmap);
+  });
+}
 
 async function handleKinerjaInputFlow(chatId, text) {
   const state = kinerjaInputFlow[chatId];
@@ -216,12 +232,63 @@ Balas *YA* untuk menyimpan atau *BATAL* untuk membatalkan.
 
 module.exports = async (msg) => {
   const chatId = msg.chat.id;
+
+  // 🔥 1. HANDLE QR IMAGE DULU
+  if (msg.photo && loginFlow[chatId]?.step === "totpSecretOrQR") {
+    try {
+      const fileId = msg.photo.slice(-1)[0].file_id;
+      const fileLink = await bot.getFileLink(fileId);
+      console.log("FILE LINK:", fileLink);
+
+      // 🔥 HANDLE URL (AMAN)
+      const url = typeof fileLink === "string" ? fileLink : fileLink.href;
+
+      const response = await axios.get(url, {
+        responseType: "arraybuffer",
+      });
+
+      const buffer = Buffer.from(response.data);
+
+      const result = await decodeQR(buffer);
+      console.log("QR RESULT:", result);
+
+      // 🔥 VALIDASI TOTP
+      if (!result || !result.startsWith("otpauth://")) {
+        return bot.sendMessage(chatId, "❌ QR bukan TOTP yang valid");
+      }
+
+      const match = result.match(/secret=([^&]+)/);
+
+      if (!match) {
+        return bot.sendMessage(chatId, "❌ Secret tidak ditemukan dalam QR");
+      }
+
+      const secret = match[1].trim(); // 🔥 penting
+
+      const acc = loadAccount(chatId);
+      if (!acc) {
+        return bot.sendMessage(chatId, "⚠️ Login dulu sebelum set TOTP");
+      }
+
+      acc.totpSecret = encrypt(secret);
+      saveAccount(chatId, acc);
+
+      delete loginFlow[chatId];
+
+      return bot.sendMessage(chatId, "✅ TOTP berhasil disimpan dari QR");
+    } catch (err) {
+      console.error("QR ERROR:", err.message);
+
+      return bot.sendMessage(chatId, "❌ Gagal membaca QR.\n\nPastikan:\n• Gambar jelas\n• QR tidak terpotong\n\nAtau kirim secret manual.");
+    }
+  }
+
+  // 🔽 2. BARU lanjut ke logic lama
   const text = msg.text?.trim();
 
   if (!text) return;
 
-  // ⚠️ TAMBAHKAN PENCEGAHAN UNTUK COMMAND
-  // Jika pesan dimulai dengan '/', skip message handler karena sudah ditangani oleh command handler
+  // ⚠️ skip command
   if (text.startsWith("/")) {
     return;
   }
@@ -234,24 +301,18 @@ module.exports = async (msg) => {
   if (loginFlow[chatId]) {
     const state = loginFlow[chatId];
 
-    console.log(`📝 Login flow for ${chatId}, step: ${state.step}, text: ${text.substring(0, 10)}...`);
-
     if (state.step === "username") {
-      // Simpan username dan minta password
       state.username = text;
       state.step = "password";
 
-      console.log(`✅ Username saved for ${chatId}: ${text}`);
-
-      return bot.sendMessage(chatId, `✅ Username tersimpan.\n\n` + `🔑 Sekarang masukkan *Password* Anda:`, { parse_mode: "Markdown" });
+      return bot.sendMessage(chatId, `✅ Username tersimpan.\n\n🔑 Masukkan Password:`, {
+        parse_mode: "Markdown",
+      });
     }
 
     if (state.step === "password") {
-      // Simpan password dan jalankan login
       const password = text;
       const existing = loadAccount(chatId);
-
-      console.log(`🔐 Password received for ${chatId}, starting login process...`);
 
       const accountData = {
         username: encrypt(state.username),
@@ -260,7 +321,6 @@ module.exports = async (msg) => {
       };
 
       saveAccount(chatId, accountData);
-
       delete loginFlow[chatId];
 
       const secret = existing?.totpSecret ? decrypt(existing.totpSecret) : null;
@@ -268,7 +328,8 @@ module.exports = async (msg) => {
       return doLogin(chatId, state.username, password, secret);
     }
 
-    if (state.step === "totpSecret") {
+    // 🔥 UPDATE DI SINI (support manual + QR)
+    if (state.step === "totpSecretOrQR") {
       const acc = loadAccount(chatId);
       if (!acc) return bot.sendMessage(chatId, "⚠️ Login dulu sebelum set TOTP");
 
@@ -280,9 +341,8 @@ module.exports = async (msg) => {
     }
   }
 
-  // Handle OTP input
+  // Handle OTP
   if (otpResolverMap[chatId] && /^\d{6}$/.test(text)) {
-    console.log(`🔢 OTP received for ${chatId}: ${text}`);
     otpResolverMap[chatId](text);
     delete otpResolverMap[chatId];
   }

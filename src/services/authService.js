@@ -136,11 +136,13 @@ async function doLogin(chatId, username, password, totpSecret = null) {
     }
 
     // Verifikasi login berhasil - cek beberapa indikator
-    await page.waitForLoadState("networkidle");
+    // await page.waitForLoadState("networkidle");
+    await page.waitForLoadState("domcontentloaded");
 
     // Cek apakah benar-benar login berhasil
     const currentUrl = page.url();
     console.log("Final URL after login:", currentUrl);
+    console.log("URL setelah login:", page.url());
 
     if (currentUrl.includes("site/login") || (await page.locator("#loginform-username").count()) > 0) {
       console.log("❌ Masih di halaman login → login gagal");
@@ -163,70 +165,112 @@ async function doLogin(chatId, username, password, totpSecret = null) {
     let jabatan = "-";
     let instansi = "-";
 
+    // try {
+    //   console.log("Mencoba membuka halaman profil...");
+    //   await page.goto("https://e-kinerja.babelprov.go.id/v1/index.php?r=pegawai%2Fprofil", {
+    //     waitUntil: "networkidle",
+    //     timeout: 20000,
+    //   });
+    //   // Tunggu beberapa detik untuk memastikan halaman dimuat
+    //   await page.waitForTimeout(3000);
+
+    //   // Cek apakah kita di halaman profil atau diarahkan ke login
+    //   if (page.url().includes("site/login")) {
+    //     console.log("⚠️ Diarahkan ke halaman login saat mengakses profil");
+    //     // Session mungkin tidak valid, tapi kita sudah menyimpan session sebelumnya
+    //     // Lanjutkan dengan data default
+    //   } else {
+    //     // Coba ambil data profil
+    //     await page.waitForSelector(".detail-view", { timeout: 10000 }).catch(() => {
+    //       console.log("Elemen .detail-view tidak ditemukan, mencoba selector alternatif...");
+    //     });
+
+    //     // Coba berbagai selector untuk tabel profil
+    //     const detailView = page.locator(".detail-view");
+    //     const detailTables = page.locator("table.table");
+
+    //     if ((await detailView.count()) > 0 || (await detailTables.count()) > 0) {
+    //       // Ambil semua baris dari tabel
+    //       const rows = await page.locator("table tr").all();
+
+    //       for (const row of rows) {
+    //         try {
+    //           const thText = await row
+    //             .locator("th")
+    //             .textContent()
+    //             .catch(() => "");
+    //           const tdText = await row
+    //             .locator("td")
+    //             .textContent()
+    //             .catch(() => "");
+
+    //           if (thText.includes("Nama") || thText.includes("nama")) nama = tdText.trim();
+    //           if (thText.includes("NIP") || thText.includes("nip")) nip = tdText.trim();
+    //         } catch (e) {
+    //           // Skip row jika error
+    //         }
+    //       }
+    //     }
+
+    //     // Coba ambil data jabatan dari elemen lain
+    //     const jabatanElement = page.locator("text=/jabatan/i, text=/Jabatan/i").first();
+    //     if ((await jabatanElement.count()) > 0) {
+    //       const parent = jabatanElement.locator("..");
+    //       jabatan = await parent
+    //         .locator("td, span, div")
+    //         .last()
+    //         .textContent()
+    //         .catch(() => "-");
+    //     }
+    //   }
+    // } catch (profileError) {
+    //   console.log("⚠️ Gagal mengambil data profil:", profileError.message);
+    //   // Lanjutkan meskipun profil gagal, karena login sudah berhasil
+    // }
+
     try {
-      console.log("Mencoba membuka halaman profil...");
-      await page.goto("https://e-kinerja.babelprov.go.id/v1/index.php?r=pegawai%2Fprofil", {
-        waitUntil: "networkidle",
-        timeout: 20000,
-      });
+      console.log("📄 Ambil data profil tanpa goto ulang...");
 
-      // Tunggu beberapa detik untuk memastikan halaman dimuat
-      await page.waitForTimeout(3000);
+      // Pastikan halaman profil sudah muncul
+      await page.waitForSelector(".detail-view", { timeout: 10000 });
 
-      // Cek apakah kita di halaman profil atau diarahkan ke login
-      if (page.url().includes("site/login")) {
-        console.log("⚠️ Diarahkan ke halaman login saat mengakses profil");
-        // Session mungkin tidak valid, tapi kita sudah menyimpan session sebelumnya
-        // Lanjutkan dengan data default
-      } else {
-        // Coba ambil data profil
-        await page.waitForSelector(".detail-view", { timeout: 10000 }).catch(() => {
-          console.log("Elemen .detail-view tidak ditemukan, mencoba selector alternatif...");
+      // Ambil semua data SEKALI (super cepat)
+      const profileData = await page.evaluate(() => {
+        const result = {
+          nama: "-",
+          nip: "-",
+          jabatan: "-",
+          instansi: "-",
+        };
+
+        // Ambil Nama & NIP dari tabel utama
+        document.querySelectorAll(".detail-view tr").forEach((row) => {
+          const th = row.querySelector("th")?.innerText || "";
+          const td = row.querySelector("td")?.innerText || "";
+
+          if (/nama/i.test(th)) result.nama = td.trim();
+          if (/nip/i.test(th)) result.nip = td.trim();
         });
 
-        // Coba berbagai selector untuk tabel profil
-        const detailView = page.locator(".detail-view");
-        const detailTables = page.locator("table.table");
+        // Ambil Jabatan & Instansi dari tabel riwayat (baris pertama)
+        const firstRow = document.querySelector(".box-success table tbody tr");
+        if (firstRow) {
+          const tds = firstRow.querySelectorAll("td");
 
-        if ((await detailView.count()) > 0 || (await detailTables.count()) > 0) {
-          // Ambil semua baris dari tabel
-          const rows = await page.locator("table tr").all();
-
-          for (const row of rows) {
-            try {
-              const thText = await row
-                .locator("th")
-                .textContent()
-                .catch(() => "");
-              const tdText = await row
-                .locator("td")
-                .textContent()
-                .catch(() => "");
-
-              if (thText.includes("Nama") || thText.includes("nama")) nama = tdText.trim();
-              if (thText.includes("NIP") || thText.includes("nip")) nip = tdText.trim();
-            } catch (e) {
-              // Skip row jika error
-            }
-          }
+          result.jabatan = tds[1]?.innerText.trim() || "-";
+          result.instansi = tds[2]?.innerText.trim() || "-";
         }
 
-        // Coba ambil data jabatan dari elemen lain
-        const jabatanElement = page.locator("text=/jabatan/i, text=/Jabatan/i").first();
-        if ((await jabatanElement.count()) > 0) {
-          const parent = jabatanElement.locator("..");
-          jabatan = await parent
-            .locator("td, span, div")
-            .last()
-            .textContent()
-            .catch(() => "-");
-        }
-      }
+        return result;
+      });
+
+      nama = profileData.nama;
+      nip = profileData.nip;
+      jabatan = profileData.jabatan;
+      instansi = profileData.instansi;
     } catch (profileError) {
       console.log("⚠️ Gagal mengambil data profil:", profileError.message);
-      // Lanjutkan meskipun profil gagal, karena login sudah berhasil
     }
-
     // Kirim pesan sukses dengan data yang berhasil dikumpulkan
     await bot.sendMessage(
       chatId,

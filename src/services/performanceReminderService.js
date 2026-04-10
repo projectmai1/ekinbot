@@ -7,6 +7,85 @@ const { performanceReminderState } = require("../state/memoryState");
 const { isHariIni, getTanggalHariIni } = require("./dailyPerformanceService");
 
 const TEST_MODE = process.env.TEST_AUTOFILL === "true";
+const DEFAULT_JAM_MULAI = process.env.JAM_MULAI || "09:00";
+const DEFAULT_JAM_SELESAI = process.env.JAM_SELESAI || "16:00";
+
+// ==========================
+// HELPER: NORMALIZE TANGGAL
+// ==========================
+function normalizeTanggal(text) {
+  const bulanMap = {
+    Jan: "01",
+    Feb: "02",
+    Mar: "03",
+    Apr: "04",
+    Mei: "05",
+    Jun: "06",
+    Jul: "07",
+    Agu: "08",
+    Sep: "09",
+    Okt: "10",
+    Nov: "11",
+    Des: "12",
+  };
+
+  const parts = text.split(" ");
+  if (parts.length !== 3) return null;
+
+  const day = parts[0].padStart(2, "0");
+  const month = bulanMap[parts[1]];
+  const year = parts[2];
+
+  return `${year}-${month}-${day}`;
+}
+
+// ==========================
+// HELPER: CEK HARI KERJA
+// ==========================
+async function isHariKerja(chatId, tanggalTarget) {
+  try {
+    const { loadCookies, buildCookieHeader } = require("./sessionService");
+
+    const cookieHeader = buildCookieHeader(loadCookies(chatId));
+
+    const url = "https://e-kinerja.babelprov.go.id/v1/index.php?r=absensi%2Fpegawai%2Fview";
+
+    const res = await axios.get(url, {
+      headers: { Cookie: cookieHeader },
+    });
+
+    const $ = cheerio.load(res.data);
+
+    let isKerja = true;
+
+    $("table.table-hover tr").each((i, row) => {
+      const cols = $(row).find("td");
+
+      if (cols.length >= 3) {
+        const tanggalText = $(cols[0]).text().trim();
+        const tanggal = normalizeTanggal(tanggalText);
+
+        const hari = $(cols[1]).text().trim();
+        const kehadiran = $(cols[2]).text().trim();
+
+        if (tanggal === tanggalTarget) {
+          console.log("📅", tanggal, "|", hari, "|", kehadiran);
+
+          if (hari === "Sabtu" || hari === "Minggu" || kehadiran.includes("Tidak Ada Jam Kerja") || kehadiran.includes("Hari Libur")) {
+            isKerja = false;
+          }
+
+          return false;
+        }
+      }
+    });
+
+    return isKerja;
+  } catch (err) {
+    console.log("❌ Error cek hari kerja:", err.message);
+    return true; // fallback
+  }
+}
 
 async function checkTodayPerformance(chatId) {
   const bot = require("../bot/telegramBot");
@@ -80,12 +159,19 @@ async function checkTodayPerformance(chatId) {
     // ==========================
     // AUTO FILL JAM 16
     // ==========================
-    if ((TEST_MODE || hour >= 16) && !hasToday && !performanceReminderState[chatId].sudahAutoIsi) {
+    const tanggalHariIni = getTanggalHariIni();
+    const hariKerja = await isHariKerja(chatId, tanggalHariIni);
+
+    if ((TEST_MODE || hour >= 16) && hariKerja && !hasToday && !performanceReminderState[chatId].sudahAutoIsi) {
       console.log(`🤖 Trigger auto fill untuk ${chatId}`);
 
       await autoFillKinerjaTambahan(chatId);
 
       performanceReminderState[chatId].sudahAutoIsi = true;
+    } else {
+      if (!hariKerja) {
+        console.log(`🚫 Skip autofill (hari libur) ${tanggalHariIni}`);
+      }
     }
 
     // ==========================
@@ -167,8 +253,8 @@ async function autoFillKinerjaTambahan(chatId) {
     form.append("KegiatanHarian[id_kegiatan_tahunan]", "");
     form.append("KegiatanHarian[uraian]", "Melaksanakan tugas tambahan kedinasan lainnya");
     form.append("KegiatanHarian[realisasi]", "1");
-    form.append("KegiatanHarian[jam_mulai]", jamMulai);
-    form.append("KegiatanHarian[jam_selesai]", jamSelesai);
+    form.append("KegiatanHarian[jam_mulai]", DEFAULT_JAM_MULAI);
+    form.append("KegiatanHarian[jam_selesai]", DEFAULT_JAM_SELESAI);
     form.append("referrer", "https://e-kinerja.babelprov.go.id/");
 
     const res = await axios.post(url, form, {

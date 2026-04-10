@@ -15,6 +15,8 @@ async function checkTodayAttendance(chatId) {
   const hour = now.getHours();
   const minute = now.getMinutes();
   const today = now.toLocaleDateString("sv-SE");
+  const todayDate = new Date();
+  const isFriday = todayDate.getDay() === 5;
 
   if (!attendanceReminderState[chatId]) {
     attendanceReminderState[chatId] = {
@@ -68,7 +70,7 @@ async function checkTodayAttendance(chatId) {
 
     // 🔔 Belum absen pulang
     if (times.length === 1) {
-      const prediksi = predictGoHomeTime(times, TARGET_JAM);
+      const prediksi = predictGoHomeTime(times, TARGET_JAM, isFriday);
 
       if ((hour > 16 || (hour === 16 && minute >= 30)) && !state.pulang) {
         await bot.sendMessage(chatId, `🔔 Anda belum absen pulang.\nMasuk: ${times[0]}\nEstimasi cukup jam (${TARGET_JAM} jam): ${prediksi}`);
@@ -79,7 +81,7 @@ async function checkTodayAttendance(chatId) {
 
     // ⚠️ Cek jam kerja kurang
     if (times.length >= 2) {
-      const durasi = calculateWorkDurationWithBreak(times);
+      const durasi = calculateWorkDurationWithBreak(times, isFriday);
 
       if (durasi < TARGET_JAM && !state.kurangJam) {
         await bot.sendMessage(chatId, `⚠️ Jam kerja kurang dari ${TARGET_JAM} jam!\nTotal: ${durasi.toFixed(2)} jam`);
@@ -145,9 +147,10 @@ async function getAttendanceReport(chatId, bulan = null) {
 
       const times = waktu.split(",").map((t) => t.trim());
 
+      const isFriday = hari.toLowerCase().includes("jum");
       let durasi = 0;
       if (times.length >= 2) {
-        durasi = calculateWorkDurationWithBreak(times);
+        durasi = calculateWorkDurationWithBreak(times, isFriday);
       }
 
       const durasiText = durasi ? ` - (${durasi.toFixed(2).replace(".", ",")} jam)` : "";
@@ -157,7 +160,7 @@ async function getAttendanceReport(chatId, bulan = null) {
 
       // 🔥 Prediksi pulang jika belum absen
       if (times.length === 1) {
-        const prediksi = predictGoHomeTime(times, TARGET_JAM);
+        const prediksi = predictGoHomeTime(times, TARGET_JAM, isFriday);
 
         if (prediksi) {
           rincian += `🏁 Estimasi Pulang : ${prediksi} (${TARGET_JAM} jam)\n`;

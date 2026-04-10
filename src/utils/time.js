@@ -17,7 +17,38 @@ function getJakartaTime() {
 // ✅ TAMBAHAN BARU
 // =============================
 
-function calculateWorkDurationWithBreak(times) {
+// function calculateWorkDurationWithBreak(times) {
+//   if (!times || times.length < 2) return 0;
+
+//   const toSeconds = (t) => {
+//     const [h, m, s] = t.split(":").map(Number);
+//     return h * 3600 + m * 60 + s;
+//   };
+
+//   let totalSeconds = 0;
+
+//   // hitung pasangan masuk-keluar
+//   for (let i = 0; i < times.length; i += 2) {
+//     if (times[i + 1]) {
+//       totalSeconds += toSeconds(times[i + 1]) - toSeconds(times[i]);
+//     }
+//   }
+
+//   // potong istirahat (12:00–13:00)
+//   const breakStart = 12 * 3600;
+//   const breakEnd = 13 * 3600;
+
+//   const firstIn = toSeconds(times[0]);
+//   const lastOut = toSeconds(times[times.length - 1]);
+
+//   if (firstIn < breakEnd && lastOut > breakStart) {
+//     totalSeconds -= 3600;
+//   }
+
+//   return totalSeconds / 3600;
+// }
+
+function calculateWorkDurationWithBreak(times, isFriday = false) {
   if (!times || times.length < 2) return 0;
 
   const toSeconds = (t) => {
@@ -27,22 +58,22 @@ function calculateWorkDurationWithBreak(times) {
 
   let totalSeconds = 0;
 
-  // hitung pasangan masuk-keluar
   for (let i = 0; i < times.length; i += 2) {
     if (times[i + 1]) {
       totalSeconds += toSeconds(times[i + 1]) - toSeconds(times[i]);
     }
   }
 
-  // potong istirahat (12:00–13:00)
-  const breakStart = 12 * 3600;
+  const breakStart = isFriday ? 11.5 * 3600 : 12 * 3600;
   const breakEnd = 13 * 3600;
+
+  const breakDuration = isFriday ? 5400 : 3600; // 1.5 jam vs 1 jam
 
   const firstIn = toSeconds(times[0]);
   const lastOut = toSeconds(times[times.length - 1]);
 
   if (firstIn < breakEnd && lastOut > breakStart) {
-    totalSeconds -= 3600;
+    totalSeconds -= breakDuration;
   }
 
   return totalSeconds / 3600;

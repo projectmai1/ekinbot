@@ -4,11 +4,12 @@ const { loadAccount, saveAccount } = require("../services/accountService");
 const { doLogin } = require("../services/authService");
 const { decrypt, encrypt } = require("../services/encryptionService");
 const kinerjaInputService = require("../services/kinerjaInputService");
-const Jimp = require("jimp").default;
+const Jimp = require("jimp");
 const QrCode = require("qrcode-reader");
 const axios = require("axios");
 
 async function decodeQR(buffer) {
+  console.log("Jimp:", Jimp);
   const image = await Jimp.read(buffer);
 
   const qr = new QrCode();

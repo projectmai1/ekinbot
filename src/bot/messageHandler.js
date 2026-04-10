@@ -4,7 +4,7 @@ const { loadAccount, saveAccount } = require("../services/accountService");
 const { doLogin } = require("../services/authService");
 const { decrypt, encrypt } = require("../services/encryptionService");
 const kinerjaInputService = require("../services/kinerjaInputService");
-const Jimp = require("jimp");
+const Jimp = require("jimp").default;
 const QrCode = require("qrcode-reader");
 const axios = require("axios");
 

@@ -2,6 +2,7 @@ const express = require("express");
 const config = require("./config");
 const bot = require("./bot/telegramBot");
 const fs = require("fs");
+const { setWebhook } = require("./services/webhookService");
 
 const { runPerformanceMonitor } = require("./scheduler/performanceMonitor");
 
@@ -82,7 +83,13 @@ setInterval(
 // START SERVER
 // ==========================
 const PORT = config.PORT;
+async function startApp() {
+  console.log("🌍 APP_ENV:", process.env.APP_ENV);
+  await setWebhook();
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`🚀 Bot aktif di http://0.0.0.0:${PORT}`);
-});
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`🚀 Bot aktif di http://0.0.0.0:${PORT}`);
+  });
+}
+
+startApp();

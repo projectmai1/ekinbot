@@ -72,7 +72,22 @@ function calculateWorkDurationWithBreak(times, isFriday = false) {
   const firstIn = toSeconds(times[0]);
   const lastOut = toSeconds(times[times.length - 1]);
 
-  if (firstIn < breakEnd && lastOut > breakStart) {
+  // 🔍 cek apakah sudah ada jeda manual (sekitar jam istirahat)
+  let hasManualBreak = false;
+
+  for (let i = 1; i < times.length - 1; i += 2) {
+    const out = toSeconds(times[i]);
+    const nextIn = toSeconds(times[i + 1]);
+
+    // jika keluar sebelum/sekitar istirahat dan masuk lagi setelahnya
+    if (out <= breakEnd && nextIn >= breakStart) {
+      hasManualBreak = true;
+      break;
+    }
+  }
+
+  // ⛔ hanya potong istirahat kalau BELUM ada break manual
+  if (!hasManualBreak && firstIn < breakEnd && lastOut > breakStart) {
     totalSeconds -= breakDuration;
   }
 

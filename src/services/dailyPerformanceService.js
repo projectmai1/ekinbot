@@ -5,6 +5,15 @@ const { ensureLogin } = require("./authService");
 const { getJakartaTime } = require("../utils/time");
 const { performanceReminderState } = require("../state/memoryState");
 
+function delay(ms) {
+  return new Promise((res) => setTimeout(res, ms));
+}
+
+async function delayRandom() {
+  const ms = 2000 + Math.random() * 4000; // 2–6 detik (lebih ringan)
+  await delay(ms);
+}
+
 // Fungsi untuk mendapatkan tanggal hari ini dalam format yang konsisten dengan e-kinerja
 function getTanggalHariIni() {
   const now = getJakartaTime();
@@ -94,11 +103,11 @@ async function getDailyPerformanceReport(chatId) {
 
     // URL untuk kinerja harian
     const url = "https://e-kinerja.babelprov.go.id/v1/index.php?r=kinerja%2Fkegiatan-harian%2Findex-v4";
-
+    await delayRandom();
     const response = await axios.get(url, {
       headers: {
         Cookie: cookieHeader,
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
         Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
         "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
         Referer: "https://e-kinerja.babelprov.go.id/v1/index.php",

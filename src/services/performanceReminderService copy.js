@@ -11,25 +11,6 @@ const DEFAULT_JAM_MULAI = process.env.JAM_MULAI || "09:00";
 const DEFAULT_JAM_SELESAI = process.env.JAM_SELESAI || "16:00";
 
 // ==========================
-// HELPER: RANDOM TIME
-// ==========================
-function randomBetween(min, max) {
-  return Math.floor(Math.random() * (max - min + 1)) + min;
-}
-
-// ==========================
-// HELPER: DELAY (ANTI BURST)
-// ==========================
-function delay(ms) {
-  return new Promise((res) => setTimeout(res, ms));
-}
-
-async function delayRandom() {
-  const ms = 3000 + Math.random() * 7000; // 3–10 detik
-  await delay(ms);
-}
-
-// ==========================
 // HELPER: NORMALIZE TANGGAL
 // ==========================
 function normalizeTanggal(text) {
@@ -70,13 +51,7 @@ async function isHariKerja(chatId, tanggalTarget) {
     const url = "https://e-kinerja.babelprov.go.id/v1/index.php?r=absensi%2Fpegawai%2Fview";
 
     const res = await axios.get(url, {
-      headers: {
-        Cookie: cookieHeader,
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8",
-        Referer: "https://e-kinerja.babelprov.go.id/",
-      },
+      headers: { Cookie: cookieHeader },
     });
 
     const $ = cheerio.load(res.data);
@@ -135,10 +110,10 @@ async function checkTodayPerformance(chatId) {
   if (!performanceReminderState[chatId]) {
     performanceReminderState[chatId] = {
       tanggal: today,
-      reminderSent: false,
-      autoFilled: false,
-      reminderHour: randomBetween(12, 15),
-      autoFillHour: randomBetween(16, 21),
+      telahDiingatkan: false,
+      reminderCount: 0,
+      lastReminderHour: null,
+      sudahAutoIsi: false,
     };
   }
 
@@ -146,10 +121,10 @@ async function checkTodayPerformance(chatId) {
   if (performanceReminderState[chatId].tanggal !== today) {
     performanceReminderState[chatId] = {
       tanggal: today,
-      reminderSent: false,
-      autoFilled: false,
-      reminderHour: randomBetween(12, 15),
-      autoFillHour: randomBetween(16, 21),
+      telahDiingatkan: false,
+      reminderCount: 0,
+      lastReminderHour: null,
+      sudahAutoIsi: false,
     };
   }
 
@@ -159,15 +134,9 @@ async function checkTodayPerformance(chatId) {
     const cookieHeader = buildCookieHeader(loadCookies(chatId));
 
     const url = "https://e-kinerja.babelprov.go.id/v1/index.php?r=kinerja%2Fkegiatan-harian%2Findex-v4";
-    await delayRandom();
+
     const res = await axios.get(url, {
-      headers: {
-        Cookie: cookieHeader,
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8",
-        Referer: "https://e-kinerja.babelprov.go.id/",
-      },
+      headers: { Cookie: cookieHeader },
     });
 
     if (res.data.includes("site/login")) return;
@@ -191,39 +160,55 @@ async function checkTodayPerformance(chatId) {
     // AUTO FILL JAM 16
     // ==========================
     const tanggalHariIni = getTanggalHariIni();
+    const hariKerja = await isHariKerja(chatId, tanggalHariIni);
 
-    if ((TEST_MODE || hour > performanceReminderState[chatId].autoFillHour || (hour === performanceReminderState[chatId].autoFillHour && minute >= 5)) && !hasToday && !performanceReminderState[chatId].autoFilled) {
-      const hariKerja = await isHariKerja(chatId, tanggalHariIni);
-
-      if (!hariKerja) {
-        console.log(`🚫 Skip autofill (hari libur) ${tanggalHariIni}`);
-        return; // STOP di sini
-      }
-
+    if ((TEST_MODE || hour >= 16) && hariKerja && !hasToday && !performanceReminderState[chatId].sudahAutoIsi) {
       console.log(`🤖 Trigger auto fill untuk ${chatId}`);
 
-      await delayRandom(); // biar tidak langsung nembak server
       await autoFillKinerjaTambahan(chatId);
 
-      performanceReminderState[chatId].autoFilled = true;
+      performanceReminderState[chatId].sudahAutoIsi = true;
+    } else {
+      if (!hariKerja) {
+        console.log(`🚫 Skip autofill (hari libur) ${tanggalHariIni}`);
+      }
     }
 
     // ==========================
     // REMINDER
     // ==========================
-    if ((hour > performanceReminderState[chatId].reminderHour || (hour === performanceReminderState[chatId].reminderHour && minute >= 5)) && !performanceReminderState[chatId].reminderSent && !hasToday) {
-      const timeStr = `${hour.toString().padStart(2, "0")}:${minute.toString().padStart(2, "0")}`;
+    if (!hasToday) {
+      // limit reminder
+      if (performanceReminderState[chatId].reminderCount >= 3) return;
 
+      // interval 2 jam
+      const last = performanceReminderState[chatId].lastReminderHour;
+      if (last !== null && hour - last < 2) return;
+      const timeStr = `${hour.toString().padStart(2, "0")}:${minute.toString().padStart(2, "0")}`;
       let msg = `📝 *REMINDER KINERJA HARIAN* (${timeStr})\n\n`;
       msg += `Hari ini Anda belum mengisi kinerja.\n\n`;
-      msg += `👉 [Isi Sekarang](https://e-kinerja.babelprov.go.id/v1/index.php?r=kinerja%2Fkegiatan-harian%2Fcreate-v4)`;
+
+      const hoursLeft = 23 - hour;
+      const minutesLeft = 60 - minute;
+
+      if (hour >= 21) {
+        msg += `⚠️ Hampir habis! (${hoursLeft}j ${minutesLeft}m)\n`;
+      } else if (hour >= 18) {
+        msg += `⏰ Waktu menipis (${hoursLeft}j ${minutesLeft}m)\n`;
+      }
+
+      msg += `👉 [Isi Sekarang](https://e-kinerja.babelprov.go.id/v1/index.php?r=kinerja%2Fkegiatan-harian%2Fcreate-v4)\n\n`;
+      msg += `_Reminder ${performanceReminderState[chatId].reminderCount + 1}/3_`;
 
       await bot.sendMessage(chatId, msg, {
         parse_mode: "Markdown",
         disable_web_page_preview: true,
       });
 
-      performanceReminderState[chatId].reminderSent = true;
+      performanceReminderState[chatId].reminderCount++;
+      performanceReminderState[chatId].lastReminderHour = hour;
+    } else {
+      performanceReminderState[chatId].telahDiingatkan = true;
     }
   } catch (err) {
     console.log("REMINDER ERROR:", err.message);
@@ -244,13 +229,7 @@ async function autoFillKinerjaTambahan(chatId) {
 
     // ambil halaman untuk csrf + default value
     const page = await axios.get(url, {
-      headers: {
-        Cookie: cookieHeader,
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8",
-        Referer: "https://e-kinerja.babelprov.go.id/",
-      },
+      headers: { Cookie: cookieHeader },
     });
 
     const $ = cheerio.load(page.data);
@@ -282,9 +261,6 @@ async function autoFillKinerjaTambahan(chatId) {
       headers: {
         Cookie: cookieHeader,
         "Content-Type": "application/x-www-form-urlencoded",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8",
         Referer: url,
       },
       maxRedirects: 0,
